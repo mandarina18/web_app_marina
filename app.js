@@ -87,16 +87,26 @@ function analyzeRandomReview() {
     sentimentResult.className = 'sentiment-result';  // Reset classes
     
     // Call Hugging Face API
-    analyzeSentiment(selectedReview)
-        .then(result => displaySentiment(result))
-        .catch(error => {
-            console.error('Error:', error);
-            showError('Failed to analyze sentiment: ' + error.message);
-        })
-        .finally(() => {
-            loadingElement.style.display = 'none';
-            analyzeBtn.disabled = false;
-        });
+    async function analyzeSentiment(text) {
+        const url = 'https://api-inference.huggingface.co/models/siebert/sentiment-roberta-large-english';
+        const headers = { 'Content-Type': 'application/json' };
+        const token = (apiToken || '').trim();
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+          }   
+    const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ inputs: text }),
+    });
+    
+    // This block only runs if the browser actually got an HTTP response
+    if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        throw new Error(`API error: ${response.status} ${response.statusText}${body ? ' - ' + body : ''}`);
+    }
+    
+    return await response.json()};
 }
 
 // Call Hugging Face API for sentiment analysis
