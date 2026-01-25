@@ -66,70 +66,94 @@ function saveApiToken() {
     }
 }
 
+
 // Analyze a random review
 function analyzeRandomReview() {
     hideError();
-    
+
     if (reviews.length === 0) {
         showError('No reviews available. Please try again later.');
         return;
     }
-    
+
     const selectedReview = reviews[Math.floor(Math.random() * reviews.length)];
-    
+
     // Display the review
     reviewText.textContent = selectedReview;
-    
+
     // Show loading state
     loadingElement.style.display = 'block';
     analyzeBtn.disabled = true;
-    sentimentResult.innerHTML = '';  // Reset previous result
-    sentimentResult.className = 'sentiment-result';  // Reset classes
-    
-    // Call Hugging Face API
-    async function analyzeSentiment(text) {
-        const url = 'https://api-inference.huggingface.co/models/siebert/sentiment-roberta-large-english';
-        const headers = { 'Content-Type': 'application/json' };
-        const token = (apiToken || '').trim();
-        if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-          }   
-    const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ inputs: text }),
-    });
-    
-    // This block only runs if the browser actually got an HTTP response
-    if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(`API error: ${response.status} ${response.statusText}${body ? ' - ' + body : ''}`);
-    }
-    
-    return await response.json()};
+    sentimentResult.innerHTML = '';
+    sentimentResult.className = 'sentiment-result';
+
+    analyzeSentiment(selectedReview)
+        .then(result => displaySentiment(result))
+        .catch(err => {
+            console.error(err);
+            showError('Failed to analyze sentiment: ' + (err?.message || err));
+        })
+        .finally(() => {
+            loadingElement.style.display = 'none';
+            analyzeBtn.disabled = false;
+        });
 }
+
 
 // Call Hugging Face API for sentiment analysis
 async function analyzeSentiment(text) {
-    const response = await fetch(
-        'https://api-inference.huggingface.co/models/siebert/sentiment-roberta-large-english',
-        {
-            headers: { 
-                Authorization: apiToken ? `Bearer ${apiToken}` : undefined,
-                'Content-Type': 'application/json'
-            },
+    const url = 'https://api-inference.huggingface.co/models/siebert/sentiment-roberta-large-english';
+
+    // Build headers safely (do NOT send Authorization if token is empty)
+    const headers = { 'Content-Type': 'application/json' };
+    const token = (apiToken || '').trim();
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    // 30s timeout to avoid "hang for minutes"
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+        const response = await fetch(url, {
             method: 'POST',
-            body: JSON.stringify({ inputs: text }),
+            headers,
+            signal: controller.signal,
+            body: JSON.stringify({
+                inputs: text,
+                options: { wait_for_model: false } // return 503 quickly if model is cold
+            }),
+        });
+
+        // Model cold start handling: 503 with estimated_time
+        if (response.status === 503) {
+            const data = await response.json().catch(() => ({}));
+            const eta = data.estimated_time ? Math.ceil(data.estimated_time) : 20;
+
+            // Inform user and retry once (or more if you want)
+            showError(`Model is loading on Hugging Face. Retrying in ~${eta}s...`);
+            await new Promise(r => setTimeout(r, (eta + 1) * 1000));
+
+            // Retry the call
+            return await analyzeSentiment(text);
         }
-    );
-    
-    if (!response.ok) {
-        throw new Error(`API error: ${response.status} ${response.statusText}`);
+
+        if (!response.ok) {
+            const errText = await response.text().catch(() => '');
+            throw new Error(`API error: ${response.status} ${response.statusText}${errText ? ' - ' + errText : ''}`);
+        }
+
+        return await response.json();
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            throw new Error('Request timed out (API is slow or model is cold). Try again.');
+        }
+        throw e;
+    } finally {
+        clearTimeout(timeoutId);
     }
-    
-    const result = await response.json();
-    return result;
 }
+
+
 
 // Display sentiment result
 function displaySentiment(result) {
