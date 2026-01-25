@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Set up event listeners
     analyzeBtn.addEventListener('click', analyzeRandomReview);
-    apiTokenInput.addEventListener('change', saveApiToken);
+    apiTokenInput.addEventListener('input', saveApiToken);
     
     // Load saved API token if exists
     const savedToken = localStorage.getItem('hfApiToken');
@@ -70,6 +70,7 @@ function saveApiToken() {
 // Analyze a random review
 function analyzeRandomReview() {
     hideError();
+    saveApiToken(); // ensure latest token is used even if input didn't lose focus
 
     if (reviews.length === 0) {
         showError('No reviews available. Please try again later.');
@@ -101,15 +102,15 @@ function analyzeRandomReview() {
 
 
 // Call Hugging Face API for sentiment analysis
-async function analyzeSentiment(text) {
+async function analyzeSentiment(text, attempt = 1) {
     const url = 'https://api-inference.huggingface.co/models/siebert/sentiment-roberta-large-english';
 
-    // Build headers safely (do NOT send Authorization if token is empty)
+    // Always read the latest value (extra safety)
+    const token = (apiTokenInput?.value || apiToken || '').trim();
+
     const headers = { 'Content-Type': 'application/json' };
-    const token = (apiToken || '').trim();
     if (token) headers.Authorization = `Bearer ${token}`;
 
-    // 30s timeout to avoid "hang for minutes"
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);
 
@@ -120,21 +121,23 @@ async function analyzeSentiment(text) {
             signal: controller.signal,
             body: JSON.stringify({
                 inputs: text,
-                options: { wait_for_model: false } // return 503 quickly if model is cold
+                options: { wait_for_model: false }
             }),
         });
 
-        // Model cold start handling: 503 with estimated_time
         if (response.status === 503) {
+            if (attempt >= 3) {
+                const raw = await response.text().catch(() => '');
+                throw new Error(`Model still loading / API busy after ${attempt} attempts. ${raw}`);
+            }
+
             const data = await response.json().catch(() => ({}));
             const eta = data.estimated_time ? Math.ceil(data.estimated_time) : 20;
 
-            // Inform user and retry once (or more if you want)
-            showError(`Model is loading on Hugging Face. Retrying in ~${eta}s...`);
+            showError(`Model is loading / API busy. Retrying in ~${eta}s (attempt ${attempt + 1}/3)...`);
             await new Promise(r => setTimeout(r, (eta + 1) * 1000));
 
-            // Retry the call
-            return await analyzeSentiment(text);
+            return analyzeSentiment(text, attempt + 1);
         }
 
         if (!response.ok) {
@@ -145,14 +148,13 @@ async function analyzeSentiment(text) {
         return await response.json();
     } catch (e) {
         if (e.name === 'AbortError') {
-            throw new Error('Request timed out (API is slow or model is cold). Try again.');
+            throw new Error('Request timed out after 30s (API slow/busy). Try again.');
         }
         throw e;
     } finally {
         clearTimeout(timeoutId);
     }
 }
-
 
 
 // Display sentiment result
