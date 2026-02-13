@@ -78,38 +78,48 @@ function loadReviews() {
 }
 
 // ====== DECISION LOGIC ======
-function determineBusinessAction(confidence, labelRaw) {
+function decideBusinessAction(labelRaw, score) {
   const label = String(labelRaw || "").toUpperCase();
 
-  // Normalize to 0..1 (0 = worst, 1 = best)
-  let normalizedScore = 0.5;
-  if (label === "POSITIVE") normalizedScore = confidence;
-  else if (label === "NEGATIVE") normalizedScore = 1.0 - confidence;
-
-  if (normalizedScore <= 0.4) {
-    return {
-      actionCode: "OFFER_COUPON",
-      uiTitle: "We’re sorry — here’s 50% off",
-      uiMessage: "We are truly sorry. Please accept this 50% discount coupon.",
-      uiType: "negative",
-    };
-  } else if (normalizedScore < 0.7) {
-    return {
-      actionCode: "REQUEST_FEEDBACK",
-      uiTitle: "Help us improve",
-      uiMessage: "Thank you! Could you tell us how we can improve?",
-      uiType: "neutral",
-    };
-  } else {
-    return {
-      actionCode: "ASK_REFERRAL",
-      uiTitle: "Glad you liked it!",
-      uiMessage: "Refer a friend and earn rewards.",
-      uiType: "positive",
-    };
+  // Simple mapping (extend if you add NEUTRAL later)
+  if (label === "NEGATIVE") {
+    // Optionally you can vary by confidence:
+    // if (score >= 0.85) -> coupon; else -> "APOLOGIZE_ONLY"
+    return "OFFER_COUPON";
   }
+
+  if (label === "POSITIVE") {
+    return "UPSELL";
+  }
+
+  return "NO_ACTION";
 }
 
+function buildUserMessage(actionTaken, label, score) {
+  const confPct = (score * 100).toFixed(1);
+
+  if (actionTaken === "OFFER_COUPON") {
+    return {
+      title: "We’re sorry — we’ll make it right",
+      text: `The review looks ${label} (${confPct}% confidence). Apology + coupon offer triggered.`,
+      cssClass: "negative",
+    };
+  }
+
+  if (actionTaken === "UPSELL") {
+    return {
+      title: "Thanks — here’s something you may like",
+      text: `The review looks ${label} (${confPct}% confidence). Upsell message triggered.`,
+      cssClass: "positive",
+    };
+  }
+
+  return {
+    title: "Thanks for the feedback",
+    text: `The review looks ${label} (${confPct}% confidence). No automated action triggered.`,
+    cssClass: "neutral",
+  };
+}
 
 // ====== MAIN ======
 async function analyzeRandomReview() {
@@ -132,14 +142,14 @@ async function analyzeRandomReview() {
     displaySentiment(result);
 
     // 2) Decide action
-    const decision = determineBusinessAction(result.score, result.label);
+    const actionTaken = decideBusinessAction(result.label, result.score);
 
-    // Show system decision in UI (with the right button/link)
-    displayDecision(decision);
+    // 3) Update UI with dynamic business message
+    const msg = buildUserMessage(actionTaken, result.label.toUpperCase(), result.score);
+    displayDecision(msg);
 
-    // Log action_taken as required
-    await sendLogToGAS(selectedReview, result.label, result.score, decision.actionCode);
-
+    // 4) Log to Google Sheets (with action_taken)
+    await sendLogToGAS(selectedReview, result.label, result.score, actionTaken);
   } catch (error) {
     console.error(error);
     showError("Analysis failed.");
@@ -203,48 +213,19 @@ function displaySentiment(data) {
   `;
 }
 
-function displayDecision(decision) {
+function displayDecision(msg) {
   if (!decisionBox || !decisionTitle || !decisionText) return;
 
-  decisionBox.className = `sentiment-result ${decision.uiType}`;
-  decisionTitle.textContent = decision.uiTitle;
-  decisionText.textContent = decision.uiMessage;
-
-  // Remove any previous action control
-  const existing = decisionBox.querySelector(".action-cta");
-  if (existing) existing.remove();
-
-  // Add the correct CTA per action
-  const cta = document.createElement("a");
-  cta.className = "action-cta";
-  cta.style.marginTop = "8px";
-  cta.style.display = "inline-block";
-  cta.style.padding = "10px 12px";
-  cta.style.borderRadius = "10px";
-  cta.style.fontWeight = "800";
-  cta.style.textDecoration = "none";
-  cta.style.border = "1px solid rgba(0,0,0,0.15)";
-
-  if (decision.actionCode === "OFFER_COUPON") {
-    cta.href = "#";
-    cta.textContent = "Get 50% Coupon";
-    cta.onclick = (e) => {
-      e.preventDefault();
-      alert("COUPON CODE: SAVE50");
-    };
-  } else if (decision.actionCode === "REQUEST_FEEDBACK") {
-    cta.href = "https://example.com/survey"; // replace with your real survey link
-    cta.target = "_blank";
-    cta.rel = "noopener noreferrer";
-    cta.textContent = "Open Survey";
-  } else if (decision.actionCode === "ASK_REFERRAL") {
-    cta.href = "https://example.com/referral"; // replace with your referral page
-    cta.target = "_blank";
-    cta.rel = "noopener noreferrer";
-    cta.textContent = "Refer a Friend";
-  }
-
-  decisionBox.appendChild(cta);
+  decisionBox.className = `sentiment-result ${msg.cssClass}`;
+  decisionTitle.textContent = msg.title;
+  decisionText.textContent = msg.text;
   decisionBox.style.display = "flex";
 }
 
+function showError(m) {
+  errorElement.textContent = m;
+  errorElement.style.display = "block";
+}
+function hideError() {
+  errorElement.style.display = "none";
+}
