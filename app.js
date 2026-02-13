@@ -114,4 +114,164 @@ function determineBusinessAction(confidence, label) {
   }
 }
 
-// Main ana
+// Main analysis
+async function analyzeRandomReview() {
+  hideError();
+
+  if (!sentimentPipeline) {
+    showError("Model is still loading. Please try again in a moment.");
+    return;
+  }
+  if (reviews.length === 0) {
+    showError("No reviews loaded.");
+    return;
+  }
+
+  const selectedReview = reviews[Math.floor(Math.random() * reviews.length)];
+  reviewText.textContent = selectedReview;
+
+  loadingElement.style.display = "block";
+  analyzeBtn.disabled = true;
+  sentimentResult.innerHTML = "";
+  if (actionResult) {
+    actionResult.style.display = "none";
+    actionResult.innerHTML = "";
+  }
+
+  try {
+    const output = await sentimentPipeline(selectedReview);
+    const result = output[0]; // {label: 'POSITIVE'|'NEGATIVE', score: 0..1}
+
+    displaySentiment(result);
+
+    // Decision maker layer (NEW)
+    const decision = determineBusinessAction(result.score, result.label);
+    displayDecision(decision);
+
+    // Log with action_taken (NEW)
+    await sendLogToGAS(selectedReview, result.label, result.score, decision.actionCode);
+  } catch (error) {
+    console.error(error);
+    showError("Analysis failed.");
+  } finally {
+    loadingElement.style.display = "none";
+    analyzeBtn.disabled = false;
+  }
+}
+
+// Logging to Google Sheets (adds action_taken)
+async function sendLogToGAS(reviewTextValue, label, score, actionTaken) {
+  const payload = {
+    ts_iso: new Date().toISOString(), // ISO timestamp (required)
+    review: reviewTextValue,
+    sentiment: `${String(label).toUpperCase()} (${(Number(score) * 100).toFixed(1)}%)`,
+    meta: JSON.stringify(getClientMeta()),
+    action_taken: actionTaken, // NEW required column
+  };
+
+  try {
+    // mode:'no-cors' avoids preflight (you won't see response, but it reaches GAS if deployed correctly)
+    await fetch(GAS_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(payload).toString(),
+    });
+    console.log("Log sent to Google Sheets:", payload);
+  } catch (e) {
+    console.warn("Log failed (possibly CORS), payload was:", payload);
+  }
+}
+
+function getClientMeta() {
+  return {
+    userId: localStorage.getItem("pseudoId"),
+    page: location.href,
+    referrer: document.referrer || null,
+    ua: navigator.userAgent,
+    language: navigator.language,
+    platform: navigator.platform,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    tz_offset_min: new Date().getTimezoneOffset(),
+    screen: {
+      w: window.screen?.width,
+      h: window.screen?.height,
+    },
+  };
+}
+
+// Sentiment UI
+function displaySentiment(data) {
+  const label = String(data.label).toUpperCase();
+  const score = Number(data.score);
+  const type = label === "POSITIVE" ? "positive" : "negative";
+
+  sentimentResult.className = `sentiment-result ${type}`;
+  sentimentResult.innerHTML = `
+    <i class="fas ${type === "positive" ? "fa-thumbs-up" : "fa-thumbs-down"} icon"></i>
+    <span>${label} (${(score * 100).toFixed(1)}% confidence)</span>
+  `;
+}
+
+// Decision UI (NEW)
+function displayDecision(decision) {
+  if (!actionResult) return;
+
+  actionResult.style.display = "block";
+  actionResult.style.borderLeft = `4px solid ${decision.uiColor}`;
+  actionResult.style.background = "rgba(148, 163, 184, 0.15)";
+  actionResult.style.padding = "12px";
+  actionResult.style.borderRadius = "8px";
+  actionResult.style.marginTop = "12px";
+
+  const ctaHtml =
+    decision.cta?.type === "link"
+      ? `<a href="${decision.cta.href}" target="_blank" rel="noopener noreferrer"
+            style="display:inline-block;margin-top:10px;font-weight:700;text-decoration:underline;">
+            ${escapeHtml(decision.cta.label)}
+         </a>`
+      : `<button id="action-cta"
+            style="margin-top:10px;padding:10px 12px;border:0;border-radius:8px;cursor:pointer;font-weight:700;">
+            ${escapeHtml(decision.cta?.label || "Continue")}
+         </button>`;
+
+  actionResult.innerHTML = `
+    <div style="font-weight:800;margin-bottom:6px;color:${decision.uiColor}">
+      ${escapeHtml(decision.uiTitle)}
+    </div>
+    <div style="line-height:1.35">${escapeHtml(decision.uiMessage)}</div>
+    <div style="margin-top:6px;font-size:12px;opacity:0.85">
+      action_taken: <b>${escapeHtml(decision.actionCode)}</b>
+    </div>
+    ${ctaHtml}
+  `;
+
+  // Button behavior (optional, UI only)
+  const btn = document.getElementById("action-cta");
+  if (btn) {
+    btn.style.background = decision.uiColor;
+    btn.style.color = "white";
+    btn.onclick = () => {
+      alert(`Action: ${decision.actionCode}`);
+    };
+  }
+}
+
+function escapeHtml(str) {
+  return String(str ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function showError(m) {
+  if (!errorElement) return;
+  errorElement.textContent = m;
+  errorElement.style.display = "block";
+}
+function hideError() {
+  if (!errorElement) return;
+  errorElement.style.display = "none";
+}
