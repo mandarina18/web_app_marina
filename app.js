@@ -1,210 +1,397 @@
-// Global variables
+// app.js (ES module version using transformers.js for local sentiment classification)
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
+
+// ------------------------------
+// Config
+// ------------------------------
+// You MUST set this to your Apps Script Web App URL (Deploy -> Web app -> /exec).
+// Alternatively, paste it in the UI field "Google Sheets Web App URL".
+let googleSheetsEndpoint = "";
+
+// Optional: destinations for UI buttons
+const SURVEY_URL = "https://example.com/survey";
+const REFERRAL_URL = "https://example.com/referral";
+const COUPON_CODE = "SAVE50";
+
+// ------------------------------
+// State
+// ------------------------------
 let reviews = [];
-let apiToken = '';
+let apiToken = ""; // kept for UI compatibility; not used with local inference
+let sentimentPipeline = null;
 
+// ------------------------------
 // DOM elements
-const analyzeBtn = document.getElementById('analyze-btn');
-const reviewText = document.getElementById('review-text');
-const sentimentResult = document.getElementById('sentiment-result');
-const loadingElement = document.querySelector('.loading');
-const errorElement = document.getElementById('error-message');
-const apiTokenInput = document.getElementById('api-token');
+// ------------------------------
+const analyzeBtn = document.getElementById("analyze-btn");
+const reviewText = document.getElementById("review-text");
+const sentimentResult = document.getElementById("sentiment-result");
+const loadingElement = document.querySelector(".loading");
+const errorElement = document.getElementById("error-message");
+const apiTokenInput = document.getElementById("api-token");
+const statusElement = document.getElementById("status");
 
-// Initialize the app
-document.addEventListener('DOMContentLoaded', function() {
-    // Load the TSV file (Papa Parse 활성화)
-    loadReviews();
-    
-    // Set up event listeners
-    analyzeBtn.addEventListener('click', analyzeRandomReview);
-    apiTokenInput.addEventListener('input', saveApiToken);
-    
-    // Load saved API token if exists
-    const savedToken = localStorage.getItem('hfApiToken');
-    if (savedToken) {
-        apiTokenInput.value = savedToken;
-        apiToken = savedToken;
-    }
+const gsEndpointInput = document.getElementById("gs-endpoint");
+
+const actionCard = document.getElementById("action-result");
+const actionMessageEl = document.getElementById("action-message");
+const actionButtonsEl = document.getElementById("action-buttons");
+
+// ------------------------------
+// Init
+// ------------------------------
+document.addEventListener("DOMContentLoaded", () => {
+  loadReviews();
+
+  analyzeBtn.addEventListener("click", analyzeRandomReview);
+  apiTokenInput.addEventListener("change", saveApiToken);
+  gsEndpointInput.addEventListener("change", saveGoogleSheetsEndpoint);
+
+  const savedToken = localStorage.getItem("hfApiToken");
+  if (savedToken) {
+    apiTokenInput.value = savedToken;
+    apiToken = savedToken;
+  }
+
+  const savedGs = localStorage.getItem("googleSheetsEndpoint");
+  if (savedGs) {
+    gsEndpointInput.value = savedGs;
+    googleSheetsEndpoint = savedGs;
+  }
+
+  initSentimentModel();
 });
 
-// Load and parse the TSV file using Papa Parse
+// ------------------------------
+// Model init
+// ------------------------------
+async function initSentimentModel() {
+  try {
+    setStatus("Loading sentiment model...");
+
+    sentimentPipeline = await pipeline(
+      "text-classification",
+      "Xenova/distilbert-base-uncased-finetuned-sst-2-english"
+    );
+
+    setStatus("Sentiment model ready");
+  } catch (error) {
+    console.error("Failed to load sentiment model:", error);
+    showError("Failed to load sentiment model. Please refresh and try again.");
+    setStatus("Model load failed");
+  }
+}
+
+function setStatus(text) {
+  if (statusElement) statusElement.textContent = text;
+}
+
+// ------------------------------
+// Reviews TSV
+// ------------------------------
 function loadReviews() {
-    fetch('reviews_test.tsv')
-        .then(response => {
-            if (!response.ok) throw new Error('Failed to load TSV file');
-            return response.text();
-        })
-        .then(tsvData => {
-            Papa.parse(tsvData, {
-                header: true,
-                delimiter: '\t',
-                complete: (results) => {
-                    reviews = results.data
-                        .map(row => row.text)
-                        .filter(text => text && text.trim() !== '');
-                    console.log('Loaded', reviews.length, 'reviews');
-                },
-                error: (error) => {
-                    console.error('TSV parse error:', error);
-                    showError('Failed to parse TSV file: ' + error.message);
-                }
-            });
-        })
-        .catch(error => {
-            console.error('TSV load error:', error);
-            showError('Failed to load TSV file: ' + error.message);
-        });
+  fetch("reviews_test.tsv")
+    .then((response) => {
+      if (!response.ok) throw new Error("Failed to load TSV file");
+      return response.text();
+    })
+    .then((tsvData) => {
+      Papa.parse(tsvData, {
+        header: true,
+        delimiter: "\t",
+        complete: (results) => {
+          reviews = (results.data || [])
+            .map((row) => row?.text)
+            .filter((text) => typeof text === "string" && text.trim() !== "");
+
+          console.log("Loaded", reviews.length, "reviews");
+        },
+        error: (error) => {
+          console.error("TSV parse error:", error);
+          showError("Failed to parse TSV file: " + error.message);
+        },
+      });
+    })
+    .catch((error) => {
+      console.error("TSV load error:", error);
+      showError("Failed to load TSV file: " + error.message);
+    });
 }
 
-// Save API token to localStorage
+// ------------------------------
+// Persist settings (UI compatibility)
+// ------------------------------
 function saveApiToken() {
-    apiToken = apiTokenInput.value.trim();
-    if (apiToken) {
-        localStorage.setItem('hfApiToken', apiToken);
-    } else {
-        localStorage.removeItem('hfApiToken');
-    }
+  apiToken = apiTokenInput.value.trim();
+  if (apiToken) localStorage.setItem("hfApiToken", apiToken);
+  else localStorage.removeItem("hfApiToken");
 }
 
+function saveGoogleSheetsEndpoint() {
+  googleSheetsEndpoint = (gsEndpointInput.value || "").trim();
+  if (googleSheetsEndpoint) localStorage.setItem("googleSheetsEndpoint", googleSheetsEndpoint);
+  else localStorage.removeItem("googleSheetsEndpoint");
+}
 
-// Analyze a random review
+// ------------------------------
+// Main flow
+// ------------------------------
 function analyzeRandomReview() {
-    hideError();
-    saveApiToken(); // ensure latest token is used even if input didn't lose focus
+  hideError();
+  hideActionCard();
 
-    if (reviews.length === 0) {
-        showError('No reviews available. Please try again later.');
-        return;
-    }
+  if (!Array.isArray(reviews) || reviews.length === 0) {
+    showError("No reviews available. Please try again later.");
+    return;
+  }
 
-    const selectedReview = reviews[Math.floor(Math.random() * reviews.length)];
+  if (!sentimentPipeline) {
+    showError("Sentiment model is not ready yet. Please wait a moment.");
+    return;
+  }
 
-    // Display the review
-    reviewText.textContent = selectedReview;
+  const selectedReview = reviews[Math.floor(Math.random() * reviews.length)];
+  reviewText.textContent = selectedReview;
 
-    // Show loading state
-    loadingElement.style.display = 'block';
-    analyzeBtn.disabled = true;
-    sentimentResult.innerHTML = '';
-    sentimentResult.className = 'sentiment-result';
+  loadingElement.style.display = "block";
+  analyzeBtn.disabled = true;
 
-    analyzeSentiment(selectedReview)
-        .then(result => displaySentiment(result))
-        .catch(err => {
-            console.error(err);
-            showError('Failed to analyze sentiment: ' + (err?.message || err));
-        })
-        .finally(() => {
-            loadingElement.style.display = 'none';
-            analyzeBtn.disabled = false;
-        });
+  sentimentResult.innerHTML = "";
+  sentimentResult.className = "sentiment-result";
+
+  analyzeSentiment(selectedReview)
+    .then(({ label, score }) => {
+      // 1) Sentiment UI
+      const sentimentBucket = bucketizeSentiment(label, score);
+      renderSentiment(label, score, sentimentBucket);
+
+      // 2) Business logic + UI
+      const decision = determineBusinessAction(score, label);
+      renderDecision(decision);
+
+      // 3) Logging
+      const tsIso = new Date().toISOString();
+      const meta = collectClientMeta();
+
+      const sentimentText = `${label} (${(score * 100).toFixed(1)}%)`;
+      return logToGoogleSheet({
+        ts_iso: tsIso,
+        review: selectedReview,
+        sentiment: sentimentText,
+        meta: JSON.stringify(meta),
+        action_taken: decision.actionCode,
+      });
+    })
+    .catch((error) => {
+      console.error("Error:", error);
+      showError(error?.message || "Failed to analyze sentiment.");
+    })
+    .finally(() => {
+      loadingElement.style.display = "none";
+      analyzeBtn.disabled = false;
+    });
 }
 
+// transformers.js inference
+async function analyzeSentiment(text) {
+  if (!sentimentPipeline) throw new Error("Sentiment model is not initialized.");
 
-// Call Hugging Face API for sentiment analysis
-async function analyzeSentiment(text, attempt = 1) {
-    const url = 'https://api-inference.huggingface.co/models/siebert/sentiment-roberta-large-english';
+  const output = await sentimentPipeline(text);
+  if (!Array.isArray(output) || output.length === 0) {
+    throw new Error("Invalid sentiment output from local model.");
+  }
 
-    // Always read the latest value (extra safety)
-    const token = (apiTokenInput?.value || apiToken || '').trim();
+  const top = output[0];
+  const label = typeof top?.label === "string" ? top.label.toUpperCase() : "NEUTRAL";
+  const score = typeof top?.score === "number" ? top.score : 0.5;
 
-    const headers = { 'Content-Type': 'application/json' };
-    if (token) headers.Authorization = `Bearer ${token}`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-    try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers,
-            signal: controller.signal,
-            body: JSON.stringify({
-                inputs: text,
-                options: { wait_for_model: false }
-            }),
-        });
-
-        if (response.status === 503) {
-            if (attempt >= 3) {
-                const raw = await response.text().catch(() => '');
-                throw new Error(`Model still loading / API busy after ${attempt} attempts. ${raw}`);
-            }
-
-            const data = await response.json().catch(() => ({}));
-            const eta = data.estimated_time ? Math.ceil(data.estimated_time) : 20;
-
-            showError(`Model is loading / API busy. Retrying in ~${eta}s (attempt ${attempt + 1}/3)...`);
-            await new Promise(r => setTimeout(r, (eta + 1) * 1000));
-
-            return analyzeSentiment(text, attempt + 1);
-        }
-
-        if (!response.ok) {
-            const errText = await response.text().catch(() => '');
-            throw new Error(`API error: ${response.status} ${response.statusText}${errText ? ' - ' + errText : ''}`);
-        }
-
-        return await response.json();
-    } catch (e) {
-        if (e.name === 'AbortError') {
-            throw new Error('Request timed out after 30s (API slow/busy). Try again.');
-        }
-        throw e;
-    } finally {
-        clearTimeout(timeoutId);
-    }
+  return { label, score };
 }
 
-
-// Display sentiment result
-function displaySentiment(result) {
-    // Default to neutral if we can't parse the result
-    let sentiment = 'neutral';
-    let score = 0.5;
-    let label = 'NEUTRAL';
-    
-    // Parse the API response (format: [[{label: 'POSITIVE', score: 0.99}]])
-    if (Array.isArray(result) && result.length > 0 && Array.isArray(result[0]) && result[0].length > 0) {
-        const sentimentData = result[0][0];
-        label = sentimentData.label?.toUpperCase() || 'NEUTRAL';
-        score = sentimentData.score ?? 0.5;
-        
-        // Determine sentiment
-        if (label === 'POSITIVE' && score > 0.5) {
-            sentiment = 'positive';
-        } else if (label === 'NEGATIVE' && score > 0.5) {
-            sentiment = 'negative';
-        }
-    }
-    
-    // Update UI
-    sentimentResult.classList.add(sentiment);
-    sentimentResult.innerHTML = `
-        <i class="fas ${getSentimentIcon(sentiment)} icon"></i>
-        <span>${label} (${(score * 100).toFixed(1)}% confidence)</span>
-    `;
+// ------------------------------
+// Sentiment UI helpers
+// ------------------------------
+function bucketizeSentiment(label, score) {
+  if (label === "POSITIVE" && score > 0.5) return "positive";
+  if (label === "NEGATIVE" && score > 0.5) return "negative";
+  return "neutral";
 }
 
-// Get appropriate icon for sentiment
-function getSentimentIcon(sentiment) {
-    switch(sentiment) {
-        case 'positive':
-            return 'fa-thumbs-up';
-        case 'negative':
-            return 'fa-thumbs-down';
-        default:
-            return 'fa-question-circle';
-    }
+function renderSentiment(label, score, bucket) {
+  sentimentResult.classList.add(bucket);
+  sentimentResult.innerHTML = `
+    <i class="fas ${getSentimentIcon(bucket)} icon"></i>
+    <span>${label} (${(score * 100).toFixed(1)}% confidence)</span>
+  `;
 }
 
-// Show error message
+function getSentimentIcon(bucket) {
+  switch (bucket) {
+    case "positive":
+      return "fa-thumbs-up";
+    case "negative":
+      return "fa-thumbs-down";
+    default:
+      return "fa-question-circle";
+  }
+}
+
+// ------------------------------
+// Business logic (from Readme(2))
+// ------------------------------
+function determineBusinessAction(confidence, label) {
+  // Normalize to 0 (worst) .. 1 (best)
+  let normalizedScore = 0.5;
+  if (label === "POSITIVE") normalizedScore = confidence;
+  else if (label === "NEGATIVE") normalizedScore = 1.0 - confidence;
+
+  if (normalizedScore <= 0.4) {
+    return {
+      normalizedScore,
+      actionCode: "OFFER_COUPON",
+      uiMessage: `We are truly sorry. Please accept this 50% discount coupon: ${COUPON_CODE}`,
+      uiColor: "#ef4444",
+    };
+  } else if (normalizedScore < 0.7) {
+    return {
+      normalizedScore,
+      actionCode: "REQUEST_FEEDBACK",
+      uiMessage: "Thank you! Could you tell us how we can improve? Please fill out a quick survey.",
+      uiColor: "#6b7280",
+    };
+  } else {
+    return {
+      normalizedScore,
+      actionCode: "ASK_REFERRAL",
+      uiMessage: "Glad you liked it! Refer a friend and earn rewards.",
+      uiColor: "#3b82f6",
+    };
+  }
+}
+
+// ------------------------------
+// Decision UI
+// ------------------------------
+function renderDecision(decision) {
+  actionCard.style.display = "block";
+  actionCard.style.borderLeftColor = decision.uiColor;
+
+  actionMessageEl.textContent = `${decision.uiMessage} (Action: ${decision.actionCode})`;
+
+  // Clear and rebuild buttons per action
+  actionButtonsEl.innerHTML = "";
+
+  if (decision.actionCode === "OFFER_COUPON") {
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "secondary";
+    copyBtn.innerHTML = `<i class="fas fa-ticket"></i> Copy Coupon Code`;
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(COUPON_CODE);
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => {
+          copyBtn.innerHTML = `<i class="fas fa-ticket"></i> Copy Coupon Code`;
+        }, 1200);
+      } catch {
+        showError("Could not copy coupon code. Please copy it manually: " + COUPON_CODE);
+      }
+    });
+    actionButtonsEl.appendChild(copyBtn);
+  }
+
+  if (decision.actionCode === "REQUEST_FEEDBACK") {
+    const surveyLink = document.createElement("a");
+    surveyLink.href = SURVEY_URL;
+    surveyLink.target = "_blank";
+    surveyLink.rel = "noreferrer";
+    surveyLink.innerHTML = `<i class="fas fa-list-check"></i> Open Survey`;
+    actionButtonsEl.appendChild(surveyLink);
+  }
+
+  if (decision.actionCode === "ASK_REFERRAL") {
+    const referralLink = document.createElement("a");
+    referralLink.href = REFERRAL_URL;
+    referralLink.target = "_blank";
+    referralLink.rel = "noreferrer";
+    referralLink.innerHTML = `<i class="fas fa-user-plus"></i> Refer a Friend`;
+    actionButtonsEl.appendChild(referralLink);
+  }
+}
+
+function hideActionCard() {
+  actionCard.style.display = "none";
+  actionButtonsEl.innerHTML = "";
+  actionMessageEl.textContent = "";
+}
+
+// ------------------------------
+// Logging
+// ------------------------------
+// Sends exactly the required columns:
+// ts_iso, review, sentiment, meta, action_taken
+async function logToGoogleSheet(row) {
+  const endpoint = (googleSheetsEndpoint || "").trim();
+  if (!endpoint) {
+    console.warn("Google Sheets endpoint is not set. Skipping logging.", row);
+    return;
+  }
+
+  try {
+    // Use JSON; Apps Script doPost should parse JSON body.
+    const res = await fetch(endpoint, {
+      method: "POST",
+      mode: "cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(row),
+      keepalive: true,
+    });
+
+    // Apps Script often returns 200 even on errors in content; still try to read response.
+    const text = await res.text().catch(() => "");
+    if (!res.ok) {
+      console.error("Logging failed:", res.status, text);
+      // Do not block UX; just surface as console warning.
+    } else {
+      console.log("Logged to Google Sheet:", text || "(ok)");
+    }
+  } catch (e) {
+    console.error("Logging request error:", e);
+    // Do not block UX; just console.
+  }
+}
+
+// "Meta" = all client info (browser-side)
+function collectClientMeta() {
+  const nav = navigator || {};
+  const scr = window.screen || {};
+  return {
+    href: window.location.href,
+    referrer: document.referrer || "",
+    userAgent: nav.userAgent || "",
+    language: nav.language || "",
+    languages: Array.isArray(nav.languages) ? nav.languages : [],
+    platform: nav.platform || "",
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+    timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+    screen: {
+      width: scr.width,
+      height: scr.height,
+      availWidth: scr.availWidth,
+      availHeight: scr.availHeight,
+      devicePixelRatio: window.devicePixelRatio || 1,
+    },
+  };
+}
+
+// ------------------------------
+// Errors
+// ------------------------------
 function showError(message) {
-    errorElement.textContent = message;
-    errorElement.style.display = 'block';
+  errorElement.textContent = message;
+  errorElement.style.display = "block";
 }
 
-// Hide error message
 function hideError() {
-    errorElement.style.display = 'none';
+  errorElement.style.display = "none";
+  errorElement.textContent = "";
 }
