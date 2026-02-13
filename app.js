@@ -6,7 +6,9 @@ import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers
 // ------------------------------
 // You MUST set this to your Apps Script Web App URL (Deploy -> Web app -> /exec).
 // Alternatively, paste it in the UI field "Google Sheets Web App URL".
-let googleSheetsEndpoint = "";
+let googleSheetsEndpoint =
+  "https://script.google.com/macros/s/AKfycbzaL6QGFxfhBXx2v7SlJOIge_uMsVvU1M3FHD36jMx0RWxHJuW0tFh303JzAk1FV4ST/exec";
+
 
 // Optional: destinations for UI buttons
 const SURVEY_URL = "https://example.com/survey";
@@ -54,10 +56,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   const savedGs = localStorage.getItem("googleSheetsEndpoint");
-  if (savedGs) {
-    gsEndpointInput.value = savedGs;
-    googleSheetsEndpoint = savedGs;
-  }
+if (savedGs) {
+  gsEndpointInput.value = savedGs;
+  googleSheetsEndpoint = savedGs;
+} else {
+  // reflect the default in the UI
+  gsEndpointInput.value = googleSheetsEndpoint;
+}
 
   initSentimentModel();
 });
