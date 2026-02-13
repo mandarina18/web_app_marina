@@ -1,266 +1,160 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>Review Sentiment Analyzer</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentiment Event Logger MVP</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --primary: #4f46e5;
+            --card-bg: #ffffff;
+        }
 
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background-color: var(--bg-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            color: #1e293b;
+        }
 
-    body {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: #333;
-      min-height: 100vh;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
+        .card {
+            background: var(--card-bg);
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+            width: 100%;
+            max-width: 500px;
+        }
 
-    .container {
-      background-color: rgba(255, 255, 255, 0.95);
-      border-radius: 15px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-      width: 90%;
-      max-width: 800px;
-      padding: 30px;
-      margin: 20px 0;
-    }
+        h2 { text-align: center; margin-top: 0; font-size: 1.5rem; }
 
-    h1 {
-      text-align: center;
-      color: #4a4a4a;
-      margin-bottom: 12px;
-      font-size: 2.2rem;
-    }
+        /* Поля статуса и ошибок (используются в app.js) */
+        #status {
+            display: block;
+            text-align: center;
+            font-size: 0.875rem;
+            color: var(--primary);
+            background: #eef2ff;
+            padding: 8px;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+        }
 
-    .description {
-      text-align: center;
-      margin-bottom: 18px;
-      color: #666;
-      line-height: 1.6;
-    }
+        #error-message {
+            display: none;
+            background: #fef2f2;
+            color: #dc2626;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            font-size: 0.875rem;
+            border: 1px solid #fee2e2;
+        }
 
-    .status {
-      text-align: center;
-      color: #4a4a4a;
-      margin-bottom: 22px;
-      font-size: 14px;
-    }
+        /* Поле ввода токена (для совместимости с UI препода) */
+        .token-section { margin-bottom: 1.5rem; }
+        .token-section label { display: block; font-size: 0.75rem; margin-bottom: 4px; color: #64748b; }
+        #api-token {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
 
-    .api-section {
-      margin-bottom: 25px;
-      padding: 20px;
-      background-color: #f8f9fa;
-      border-radius: 10px;
-      border-left: 4px solid #667eea;
-    }
+        /* Область вывода отзыва */
+        .review-box {
+            background: #f1f5f9;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            min-height: 60px;
+            font-style: italic;
+            border-left: 4px solid var(--primary);
+        }
 
-    .api-section h2 {
-      margin-bottom: 15px;
-      color: #4a4a4a;
-      font-size: 1.2rem;
-    }
+        /* Кнопка */
+        #analyze-btn {
+            width: 100%;
+            padding: 12px;
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
 
-    .api-input { display: flex; flex-direction: column; gap: 10px; }
+        #analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    input[type="text"] {
-      padding: 12px 15px;
-      border: 1px solid #ddd;
-      border-radius: 8px;
-      font-size: 16px;
-      transition: border-color 0.3s;
-    }
-    input[type="text"]:focus {
-      border-color: #667eea;
-      outline: none;
-      box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
-    }
+        /* Индикатор загрузки */
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 1rem 0;
+            color: var(--primary);
+            font-size: 0.875rem;
+        }
 
-    button {
-      background: linear-gradient(to right, #667eea, #764ba2);
-      color: white;
-      border: none;
-      padding: 12px 20px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 16px;
-      font-weight: 600;
-      transition: transform 0.2s, box-shadow 0.2s;
-      margin-top: 10px;
-    }
-    button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2); }
-    button:active { transform: translateY(0); }
+        /* Контейнер результата (стилизуется классами positive/negative/neutral из JS) */
+        .sentiment-result {
+            margin-top: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 1rem;
+            border-radius: 8px;
+            font-weight: bold;
+        }
 
-    .review-section { margin-bottom: 25px; }
-
-    .review-card {
-      background-color: white;
-      border-radius: 10px;
-      padding: 20px;
-      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-      margin-bottom: 14px;
-    }
-    .review-text {
-      line-height: 1.6;
-      margin-top: 8px;
-      font-size: 16px;
-      color: #444;
-      white-space: pre-wrap;
-    }
-
-    .sentiment-result {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 15px;
-      padding: 15px;
-      border-radius: 10px;
-      margin-top: 14px;
-      background-color: #f8f9fa;
-      font-weight: bold;
-      font-size: 18px;
-    }
-
-    .positive { color: #28a745; border: 2px solid #28a745; }
-    .negative { color: #dc3545; border: 2px solid #dc3545; }
-    .neutral  { color: #ffc107; border: 2px solid #ffc107; }
-
-    .icon { font-size: 24px; }
-
-    .loading { display: none; text-align: center; margin: 20px 0; }
-    .spinner {
-      border: 4px solid rgba(0, 0, 0, 0.1);
-      border-left: 4px solid #667eea;
-      border-radius: 50%;
-      width: 30px;
-      height: 30px;
-      animation: spin 1s linear infinite;
-      margin: 0 auto;
-    }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-    .error {
-      color: #dc3545;
-      padding: 10px;
-      border-radius: 5px;
-      background-color: #f8d7da;
-      border: 1px solid #f5c6cb;
-      margin: 10px 0;
-      display: none;
-    }
-
-    .action-card {
-      background-color: white;
-      border-radius: 10px;
-      padding: 18px;
-      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-      margin-top: 14px;
-      display: none;
-      border-left: 6px solid #6b7280;
-    }
-
-    .action-title {
-      font-weight: 700;
-      color: #4a4a4a;
-      margin-bottom: 8px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .action-message { color: #444; line-height: 1.5; margin-bottom: 12px; }
-
-    .action-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
-
-    .action-buttons a, .action-buttons button.secondary {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 14px;
-      border-radius: 8px;
-      text-decoration: none;
-      font-weight: 700;
-      border: 1px solid rgba(0,0,0,0.12);
-      background: #f8f9fa;
-      color: #333;
-      cursor: pointer;
-    }
-
-    footer {
-      text-align: center;
-      margin-top: 30px;
-      color: rgba(255, 255, 255, 0.8);
-      font-size: 14px;
-    }
-
-    @media (max-width: 600px) {
-      .container { width: 95%; padding: 20px; }
-      h1 { font-size: 1.8rem; }
-      button { width: 100%; }
-      .action-buttons a, .action-buttons button.secondary { width: 100%; justify-content: center; }
-    }
-  </style>
+        .sentiment-result.positive { background: #dcfce7; color: #166534; }
+        .sentiment-result.negative { background: #fee2e2; color: #991b1b; }
+        .sentiment-result.neutral { background: #f1f5f9; color: #475569; }
+        
+        .icon { font-size: 1.5rem; }
+    </style>
 </head>
-
 <body>
-  <div class="container">
-    <h1>Review Sentiment Analyzer</h1>
-    <p class="description">Analyze the sentiment of product reviews using a local in-browser AI model</p>
-    <div class="status" id="status">Initializing…</div>
 
-    <div class="api-section">
-      <h2>Settings</h2>
-      <div class="api-input">
-        <label for="api-token">Hugging Face API Token (not used with local inference):</label>
-        <input type="text" id="api-token" placeholder="hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
-        <p><small>Your token is stored only in your browser.</small></p>
+<div class="card">
+    <h2>Review Analyzer</h2>
+    
+    <div id="status">Initializing...</div>
+    
+    <div id="error-message"></div>
 
-        <label for="gs-endpoint">Google Sheets Web App URL (Apps Script “Deploy as web app” URL):</label>
-        <input type="text" id="gs-endpoint" placeholder="https://script.google.com/macros/s/....../exec">
-        <p><small>Used only to log: ts_iso, review, sentiment, meta, action_taken.</small></p>
-      </div>
+    <div class="token-section">
+        <label for="api-token">Hugging Face Token (UI Compatibility):</label>
+        <input type="password" id="api-token" placeholder="Optional for local inference">
     </div>
 
-    <div class="review-section">
-      <button id="analyze-btn">Analyze Random Review</button>
-
-      <div class="loading">
-        <div class="spinner"></div>
-        <p>Analyzing sentiment...</p>
-      </div>
-
-      <div class="error" id="error-message"></div>
-
-      <div class="review-card">
-        <h3>Selected Review:</h3>
-        <p class="review-text" id="review-text">Click the button above to analyze a random review</p>
-      </div>
-
-      <div class="sentiment-result" id="sentiment-result">
-        <i class="fas fa-question-circle icon"></i>
-        <span>Sentiment will appear here</span>
-      </div>
-
-      <div class="action-card" id="action-result">
-        <div class="action-title" id="action-title">
-          <i class="fas fa-bolt"></i>
-          <span>System Decision</span>
-        </div>
-        <div class="action-message" id="action-message"></div>
-        <div class="action-buttons" id="action-buttons"></div>
-      </div>
+    <div class="review-box">
+        <div id="review-text">Waiting for model to load...</div>
     </div>
-  </div>
 
-  <footer>
-    <p>This app uses Transformers.js (local browser inference)</p>
-  </footer>
+    <div class="loading">
+        <i class="fas fa-spinner fa-spin"></i> Analyzing...
+    </div>
 
-  <script type="module" src="app.js"></script>
+    <button id="analyze-btn">Analyze Random Review</button>
+
+    <div id="sentiment-result" class="sentiment-result"></div>
+
+    <div id="action-result" style="display:none;"></div>
+</div>
+
+<script type="module" src="app.js"></script>
+
 </body>
 </html>
